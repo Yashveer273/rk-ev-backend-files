@@ -6,6 +6,11 @@ const {
 } = require('../middlewares/authMiddleware');
 
 const {
+  getOwnedCluster,
+  getClustersByKycStatus,
+  getClusters,
+  getCluster,
+  deleteCluster,
   createCluster,
   updateCapacity,
   updateLocation,
@@ -18,9 +23,16 @@ const {
 } = require('../controllers/clusterController');
 
 // --- SUPER ADMIN ROUTES ---
+router.get('/kyc-status', verifySuperAdmin, getClustersByKycStatus);
+router.get('/mine', verifyClusterOwner, getOwnedCluster);
+router.get('/', verifySuperAdmin, getClusters);
+router.get('/:id', verifySuperAdmin, getCluster);
 router.post('/create', verifySuperAdmin, createCluster);
+router.delete('/:id', verifySuperAdmin, deleteCluster);
 router.put('/:id/capacity', verifySuperAdmin, updateCapacity);
 router.put('/:id/location', verifySuperAdmin, updateLocation);
+router.put('/kyc/:kycId/status', verifySuperAdmin, verifyKycStatus);
+router.put('/:clusterId/kyc', verifySuperAdmin, verifyKycStatus);
 router.put('/:id/kyc-verify/:clusterId', verifySuperAdmin, verifyKycStatus);
 
 // --- SHARED / OWNER DETAILS ROUTE ---

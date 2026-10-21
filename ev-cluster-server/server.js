@@ -18,7 +18,7 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, error: 'Server Error' });
 });
 
-const PORT = process.env.PORT || 5002;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`EV Cluster Server running on port ${PORT}`);
 });
