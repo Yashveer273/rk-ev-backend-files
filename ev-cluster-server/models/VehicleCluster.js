@@ -21,14 +21,28 @@ const vehicleClusterSchema = new mongoose.Schema({
     ownerName: { type: String },
     pan: { type: String },
     email: { type: String, index: true },
+    password: { type: String, required: true },
     image: { type: String },
-    status: { type: String, enum: ['Verified', 'Pending', 'Rejected'], default: 'Pending', index: true }
+    status: { type: String, enum: ['Active', 'Verified', 'Pending', 'Rejected', 'Restricted'], default: 'Pending', index: true }
   },
-  kyc: {
-    id: { type: String },
-    aadhaar: { type: String }, // Redacted/Secure handling
-    kycStatus: { type: String, enum: ['Pending', 'Verified', 'Rejected'], default: 'Pending', index: true }
+ // VehicleCluster Schema ke andar kyc sub-schema mein 'documentUrl' add karein:
+kyc: {
+kycId: { 
+    type: String, 
+    default: () => "KYC-" + Math.floor(100000 + Math.random() * 900000) 
   },
+  pan: { type: String, required: true },
+  documentUrl: { type: String, required: true },
+  kycStatus: { type: String, enum: ['Pending', 'Verified', 'Rejected'], default: 'Pending' },
+  rejectionReason: { type: String, default: '' },
+  submittedAt: { type: Date, default: Date.now }
+},
+  loginHistory: [
+    {
+      loginTime: { type: Date, default: Date.now },
+      ipAddress: { type: String }
+    }
+  ],
   AllEV_vehicleoperator: [
     {
       vehicleId: { type: String, index: true },

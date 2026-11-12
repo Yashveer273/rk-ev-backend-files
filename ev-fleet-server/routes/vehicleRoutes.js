@@ -25,12 +25,12 @@ router.use(verifyEncryptionAuth);
 // 1. PRIMARY & SEARCH ROUTES
 // ==========================================
 
-// Create EV Vehicle OR Search with Pagination & Filters
+// Create EV Vehicle OR Search with Pagination & Multi-Role Filters
 router.route('/')
   .post(createVehicle)
   .get(searchVehicles);
 
-// Full Vehicle operations by vehicleId
+// Full Vehicle operations by vehicleId (GET, PUT, PATCH, DELETE)
 router.route('/:id')
   .get(getVehicleById)
   .put(updateVehicle)

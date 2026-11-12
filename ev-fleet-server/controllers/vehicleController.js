@@ -1,11 +1,6 @@
 const EVVehicle = require('../models/EVVehicle');
 const crypto = require('crypto');
 
-// ==========================================
-// 1. CORE CRUD & PAGINATED SEARCH APIs
-// ==========================================
-
-// Create a new EV Vehicle
 exports.createVehicle = async (req, res) => {
   try {
     const newVehicle = await EVVehicle.create(req.body);
@@ -15,7 +10,6 @@ exports.createVehicle = async (req, res) => {
   }
 };
 
-// Advanced Search & Paginated List
 exports.searchVehicles = async (req, res) => {
   try {
     const { 
@@ -27,40 +21,73 @@ exports.searchVehicles = async (req, res) => {
       companyName, 
       sellerName,
       purchaseLocation,
-      acquisitionType,
       status, 
       vehicleModelName,
       vehicleYearModel,
       vehicleMotorPowerKw,
       batteryCapacityKwh,
-      rangeKm,
-      topSpeedKmph,
+      minRangeKm,
+      minTopSpeedKmph,
+      
+      // Independent Financial & Investment Filters
+      investmentAmount,
+      minInvestment,
+      maxInvestment,
+      investorReturnRate,
+      mininvestorReturnRate,
+      maxinvestorReturnRate,
+      outboundRentalRate,
+      minOutboundRentalRate,
+      maxOutboundRentalRate,
+
       search 
     } = req.query;
     
     let query = {};
 
-    // Specific Exact/Regex Filters
     if (vehicleId) query.vehicleId = new RegExp(vehicleId, 'i');
     if (vehicleType) query.vehicleType = new RegExp(vehicleType, 'i');
     if (vehicleNoPlate) query.vehicleNoPlate = new RegExp(vehicleNoPlate, 'i');
     if (status) query.status = status;
     if (vehicleModelName) query.vehicleModelName = new RegExp(vehicleModelName, 'i');
+    if (vehicleYearModel) query.vehicleYearModel = Number(vehicleYearModel);
     
-    // Nested Object Filters
     if (companyName) query['companyData.companyName'] = new RegExp(companyName, 'i');
     if (sellerName) query['companyData.sellerName'] = new RegExp(sellerName, 'i');
     if (purchaseLocation) query['companyData.purchaseLocation'] = new RegExp(purchaseLocation, 'i');
-    if (acquisitionType) query['pricing.acquisitionType'] = acquisitionType;
 
-    // Numerical Filters
-    if (vehicleYearModel) query.vehicleYearModel = Number(vehicleYearModel);
+    // 1. Investment Amount Filter (For Investors)
+    if (investmentAmount !== undefined && investmentAmount !== '') {
+      query['pricing.investmentAmount'] = Number(investmentAmount);
+    } else if (minInvestment || maxInvestment) {
+      query['pricing.investmentAmount'] = {};
+      if (minInvestment) query['pricing.investmentAmount'].$gte = Number(minInvestment);
+      if (maxInvestment) query['pricing.investmentAmount'].$lte = Number(maxInvestment);
+    }
+
+    // 2. Vendor Rental Cost Filter (For Vendors)
+    if (investorReturnRate !== undefined && investorReturnRate !== '') {
+      query['pricing.investorReturnRate'] = Number(investorReturnRate);
+    } else if (mininvestorReturnRate || maxinvestorReturnRate) {
+      query['pricing.investorReturnRate'] = {};
+      if (mininvestorReturnRate) query['pricing.investorReturnRate'].$gte = Number(mininvestorReturnRate);
+      if (maxinvestorReturnRate) query['pricing.investorReturnRate'].$lte = Number(maxinvestorReturnRate);
+    }
+
+    // 3. Outbound Rental Rate Filter (For Customer Rentals)
+    if (outboundRentalRate !== undefined && outboundRentalRate !== '') {
+      query['pricing.outboundRentalRate'] = Number(outboundRentalRate);
+    } else if (minOutboundRentalRate || maxOutboundRentalRate) {
+      query['pricing.outboundRentalRate'] = {};
+      if (minOutboundRentalRate) query['pricing.outboundRentalRate'].$gte = Number(minOutboundRentalRate);
+      if (maxOutboundRentalRate) query['pricing.outboundRentalRate'].$lte = Number(maxOutboundRentalRate);
+    }
+
     if (vehicleMotorPowerKw) query.vehicleMotorPowerKw = Number(vehicleMotorPowerKw);
     if (batteryCapacityKwh) query.batteryCapacityKwh = Number(batteryCapacityKwh);
-    if (rangeKm) query.rangeKm = { $gte: Number(rangeKm) }; 
-    if (topSpeedKmph) query.topSpeedKmph = { $gte: Number(topSpeedKmph) }; 
+    if (minRangeKm) query.rangeKm = { $gte: Number(minRangeKm) }; 
+    if (minTopSpeedKmph) query.topSpeedKmph = { $gte: Number(minTopSpeedKmph) }; 
 
-    // Global Keyword Fallback Search
     if (search) {
       query.$or = [
         { vehicleNoPlate: new RegExp(search, 'i') },
@@ -71,7 +98,6 @@ exports.searchVehicles = async (req, res) => {
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
-
     const vehicles = await EVVehicle.find(query)
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -92,7 +118,6 @@ exports.searchVehicles = async (req, res) => {
   }
 };
 
-// Get single EV vehicle by vehicleId
 exports.getVehicleById = async (req, res) => {
   try {
     const vehicle = await EVVehicle.findOne({ vehicleId: req.params.id });
@@ -103,7 +128,6 @@ exports.getVehicleById = async (req, res) => {
   }
 };
 
-// Full / Partial Vehicle Update (Dynamic Put/Patch)
 exports.updateVehicle = async (req, res) => {
   try {
     const updatedVehicle = await EVVehicle.findOneAndUpdate(
@@ -118,7 +142,6 @@ exports.updateVehicle = async (req, res) => {
   }
 };
 
-// Delete entire EV vehicle record
 exports.deleteVehicle = async (req, res) => {
   try {
     const deletedVehicle = await EVVehicle.findOneAndDelete({ vehicleId: req.params.id });
@@ -129,11 +152,6 @@ exports.deleteVehicle = async (req, res) => {
   }
 };
 
-// ==========================================
-// 2. VEHICLE IMAGE SPECIFIC APIs
-// ==========================================
-
-// Get All Images for a Vehicle
 exports.getVehicleImages = async (req, res) => {
   try {
     const vehicle = await EVVehicle.findOne({ vehicleId: req.params.id }).select('vehicleImage');
@@ -144,7 +162,6 @@ exports.getVehicleImages = async (req, res) => {
   }
 };
 
-// Add / Update Image in vehicleImage Array
 exports.addOrUpdateVehicleImage = async (req, res) => {
   try {
     const { angle, imgurl, fuel, imageId } = req.body;
@@ -153,7 +170,6 @@ exports.addOrUpdateVehicleImage = async (req, res) => {
     if (!vehicle) return res.status(404).json({ success: false, error: 'Vehicle not found' });
 
     if (imageId) {
-      // Existing image update karo
       const imgIndex = vehicle.vehicleImage.findIndex(img => img.imageId === imageId);
       if (imgIndex > -1) {
         if (angle) vehicle.vehicleImage[imgIndex].angle = angle;
@@ -163,7 +179,6 @@ exports.addOrUpdateVehicleImage = async (req, res) => {
         return res.status(404).json({ success: false, error: 'Image ID not found' });
       }
     } else {
-      // New image push karo with auto-generated imageId
       const newImgId = 'IMG-' + crypto.randomBytes(4).toString('hex').toUpperCase();
       vehicle.vehicleImage.push({ imageId: newImgId, angle, imgurl, fuel });
     }
@@ -175,12 +190,10 @@ exports.addOrUpdateVehicleImage = async (req, res) => {
   }
 };
 
-// Delete a specific Image by imageId
 exports.deleteVehicleImage = async (req, res) => {
   try {
     const { imageId } = req.params;
     const vehicle = await EVVehicle.findOne({ vehicleId: req.params.id });
-
     if (!vehicle) return res.status(404).json({ success: false, error: 'Vehicle not found' });
 
     vehicle.vehicleImage = vehicle.vehicleImage.filter(img => img.imageId !== imageId);
@@ -192,11 +205,6 @@ exports.deleteVehicleImage = async (req, res) => {
   }
 };
 
-// ==========================================
-// 3. FIELD-SPECIFIC UPDATES (Individual Modifiers)
-// ==========================================
-
-// Update Model Name specifically
 exports.updateModelName = async (req, res) => {
   try {
     const { vehicleModelName } = req.body;
@@ -212,7 +220,6 @@ exports.updateModelName = async (req, res) => {
   }
 };
 
-// Update Year Model specifically
 exports.updateYearModel = async (req, res) => {
   try {
     const { vehicleYearModel } = req.body;
@@ -228,7 +235,6 @@ exports.updateYearModel = async (req, res) => {
   }
 };
 
-// Update Vehicle Status
 exports.updateStatus = async (req, res) => {
   try {
     const { status } = req.body;
@@ -243,3 +249,5 @@ exports.updateStatus = async (req, res) => {
     res.status(400).json({ success: false, error: error.message });
   }
 };
+
+

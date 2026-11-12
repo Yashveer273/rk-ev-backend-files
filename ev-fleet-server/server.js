@@ -10,8 +10,10 @@ connectDB();
 
 app.use(express.json());
 app.use(cors());
-
+ 
 app.use('/api/vehicles', require('./routes/vehicleRoutes'));
+app.use('/api/evFleet-Cluster-Association', require('./routes/evFleet-Cluster-Association-Routes'));
+app.use('/api/vehicle-assign-closter-info', require('./routes/evClusterAssigningRoutes'));
 
 app.use((err, req, res, next) => {
   console.error(err.stack);

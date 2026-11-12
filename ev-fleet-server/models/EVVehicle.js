@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const crypto = require('crypto'); // Built-in Node.js module unique ID/hash generate karne ke liye
+const crypto = require('crypto');
 
 const evVehicleSchema = new mongoose.Schema({
   vehicleId: { 
@@ -10,7 +10,6 @@ const evVehicleSchema = new mongoose.Schema({
   vehicleType: { type: String, required: true, index: true },
   vehicleNoPlate: { type: String, required: true, index: true },
   
-  // Company & Purchase/Seller Details
   companyData: {
     companyName: { type: String, required: true, index: true },
     sellerName: { type: String, default: 'Company Direct', index: true },
@@ -18,27 +17,19 @@ const evVehicleSchema = new mongoose.Schema({
     purchaseLocation: { type: String, required: true, index: true }
   },
 
-  // Pricing Structure (Default Buy Cost set to 70000)
+  // Independent Financial & Pricing Structure
   pricing: {
-    acquisitionType: { 
-      type: String, 
-      enum: ['Buy', 'Rent'], 
-      default: 'Buy', 
-      index: true 
-    },
     purchasePrice: { type: Number, required: true, default: 70000 },
-    vendorRentalCost: { type: Number, default: 0 },      
-    outboundRentalRate: { type: Number, default: 0 }     
+    investmentAmount: { type: Number, default: 0, index: true },
+    investorReturnRate: { type: Number, default: 0, index: true },      
+    outboundRentalRate: { type: Number, default: 0, index: true }
   },
 
-  // Vehicle Images with Auto-Generated imageId
   vehicleImage: [{
-    imageId: { 
-      type: String 
-    },
+    imageId: { type: String },
     angle: String,
     imgurl: String,
-    fuel: String // Future-proofing ke liye
+    fuel: String
   }],
 
   status: { 
@@ -47,7 +38,18 @@ const evVehicleSchema = new mongoose.Schema({
     default: 'Active', 
     index: true 
   },
-  
+  // Current Active Cluster Association
+  associateCluster: {
+    clusterId: { type: String, default: null },
+    assignedAt: { type: Date, default: null }
+  },
+
+  // Reference ID to EVClusterHistory Collection
+  clusterAssociationHistory: {
+    type: String,
+    ref: 'EVClusterHistory',
+    default: null
+  },
   vehicleModelName: { type: String, required: true, index: true },
   vehicleYearModel: { type: Number, required: true, index: true },
   vehicleMotorPowerKw: { type: Number, default: null, index: true },
@@ -57,14 +59,10 @@ const evVehicleSchema = new mongoose.Schema({
   topSpeedKmph: { type: Number, required: true, index: true }
 }, { timestamps: true });
 
-// Pre-save middleware to automatically generate vehicleId and imageIds if not provided
 evVehicleSchema.pre('save', function (next) {
-  // Agar vehicleId pehle se nahi hai toh auto-generate karein (e.g., EV-XXXXXXXX)
   if (!this.vehicleId) {
     this.vehicleId = 'EV-' + crypto.randomBytes(4).toString('hex').toUpperCase();
   }
-
-  // Agar vehicle images hain toh har image ke liye auto-generate imageId
   if (this.vehicleImage && this.vehicleImage.length > 0) {
     this.vehicleImage.forEach((img) => {
       if (!img.imageId) {
@@ -72,11 +70,9 @@ evVehicleSchema.pre('save', function (next) {
       }
     });
   }
-
   next();
 });
 
-// Text & Compound Indexing for fast searching
 evVehicleSchema.index({ 
   vehicleNoPlate: 'text', 
   vehicleModelName: 'text', 

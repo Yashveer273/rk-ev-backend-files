@@ -67,7 +67,7 @@ exports.getClusters = async (req, res) => {
     if (Object.keys(createdAt).length) conditions.push({ createdAt });
 
     const filter = conditions.length > 1 ? { $and: conditions } : (conditions[0] || {});
-    const clusters = await VehicleCluster.find(filter).select('-kyc.aadhaar').sort({ createdAt: -1 });
+    const clusters = await VehicleCluster.find(filter).select('-kyc.pan').sort({ createdAt: -1 });
 
     res.status(200).json({ success: true, count: clusters.length, data: clusters });
   } catch (error) {
@@ -81,7 +81,7 @@ exports.getCluster = async (req, res) => {
     const filter = mongoose.Types.ObjectId.isValid(id)
       ? { _id: id }
       : { vehicleClusterOwnerId: id };
-    const cluster = await VehicleCluster.findOne(filter).select('-kyc.aadhaar');
+    const cluster = await VehicleCluster.findOne(filter).select('-kyc.pan');
 
     if (!cluster) {
       return res.status(404).json({ success: false, message: 'Cluster not found' });
@@ -103,7 +103,7 @@ exports.getOwnedCluster = async (req, res) => {
     const filter = mongoose.Types.ObjectId.isValid(ownerId)
       ? { _id: ownerId }
       : { vehicleClusterOwnerId: ownerId };
-    const cluster = await VehicleCluster.findOne(filter).select('-kyc.aadhaar');
+    const cluster = await VehicleCluster.findOne(filter).select('-kyc.pan');
 
     if (!cluster) {
       return res.status(404).json({ success: false, message: 'Cluster not found' });
@@ -120,7 +120,7 @@ exports.getClustersByKycStatus = async (req, res) => {
     const statuses = ['Verified', 'Rejected', 'Pending'];
     const results = await Promise.all(statuses.map((kycStatus) =>
       VehicleCluster.find({ 'kyc.kycStatus': kycStatus })
-        .select('-kyc.aadhaar')
+        .select('-kyc.pan')
         .sort({ createdAt: -1 })
     ));
     const [verified, rejected, pending] = results;
@@ -161,10 +161,13 @@ exports.deleteCluster = async (req, res) => {
   }
 };
 
-// 1. Super Admin: नया क्लस्टर क्रिएट करना
 exports.createCluster = async (req, res) => {
   try {
     const { vehicleClusterLocation, vehicleCapacity, vehicleClusterOwnerName, vehicleClusterDetails } = req.body;
+
+    if (!vehicleClusterDetails || !vehicleClusterDetails.email || !vehicleClusterDetails.password) {
+      return res.status(400).json({ success: false, message: "Owner email and access password are required." });
+    }
 
     const randomNum = Math.floor(1000 + Math.random() * 9000);
     const vehicleClusterOwnerId = `VCO-${randomNum}`;
@@ -177,13 +180,14 @@ exports.createCluster = async (req, res) => {
       vehicleClusterOwnerId,
       vehicleClusterDetails: {
         ...vehicleClusterDetails,
-        status: 'Pending' // हमेशा शुरुआत में Pending रहेगा, सुपर एडमिन अप्रूव करेगा
+        status: 'Pending'
       },
       kyc: {
         id: kycId,
-        aadhaar: null,
+        pan: null,
         kycStatus: 'Pending'
       },
+      loginHistory: [],
       AllEV_vehicleoperator: []
     });
 
@@ -194,7 +198,6 @@ exports.createCluster = async (req, res) => {
   }
 };
 
-// 2. Super Admin: क्लस्टर की कैपेसिटी बदलना
 exports.updateCapacity = async (req, res) => {
   try {
     const { id } = req.params;
@@ -216,7 +219,6 @@ exports.updateCapacity = async (req, res) => {
   }
 };
 
-// 3. Super Admin: क्लस्टर की लोकेशन या डिटेल्स अपडेट करना
 exports.updateLocation = async (req, res) => {
   try {
     const { id } = req.params;
@@ -238,106 +240,84 @@ exports.updateLocation = async (req, res) => {
   }
 };
 
-// 4. Super Admin / Owner Details Update
 exports.updateOwnerDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const { ownerName, pan, email, image, status } = req.body;
+    const { ownerName, pan, email, password, image, status } = req.body;
     const userRole = req.headers['x-user-role'];
 
-    const cluster = await VehicleCluster.findOne({ vehicleClusterOwnerId: id });
+    const cluster = await VehicleCluster.findOne({ 
+      $or: [{ vehicleClusterOwnerId: id }, { _id: mongoose.Types.ObjectId.isValid(id) ? id : null }] 
+    });
+    
     if (!cluster) {
       return res.status(404).json({ success: false, message: "Cluster not found" });
     }
 
-    if (ownerName) cluster.vehicleClusterDetails.ownerName = ownerName;
-    if (pan) cluster.vehicleClusterDetails.pan = pan;
+    if (ownerName) {
+      cluster.vehicleClusterOwnerName = ownerName;
+      cluster.vehicleClusterDetails.ownerName = ownerName;
+    }
+    if (pan !== undefined) cluster.vehicleClusterDetails.pan = pan;
     if (email) cluster.vehicleClusterDetails.email = email;
-    if (image) cluster.vehicleClusterDetails.image = image;
+    if (password && password.trim() !== "") {
+      cluster.vehicleClusterDetails.password = password;
+    }
+    if (image !== undefined) cluster.vehicleClusterDetails.image = image;
 
-    // स्टेटस केवल सुपर एडमिन बदल सकता है
     if (status && userRole === 'super-admin') {
       cluster.vehicleClusterDetails.status = status;
     }
 
     await cluster.save();
-    res.status(200).json({ success: true, message: "Owner details updated successfully", data: cluster });
+    res.status(200).json({ success: true, message: "Cluster details & status updated successfully", data: cluster });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
-// 5. Cluster Owner: केवल अपना आधार (Aadhaar) सबमिट करना (स्टेटस पास/फेल सुपर एडमिन करेगा)
-exports.submitKycDetails = async (req, res) => {
+exports.verifyOwnerLogin = async (req, res) => {
   try {
-    const { clusterId } = req.params;
-    const { aadhaar } = req.body; // ओनर अपना आधार नंबर दर्ज करेगा
+    const { clusterId, email, password } = req.body;
 
-    const cluster = await VehicleCluster.findById(clusterId);
+    const query = clusterId 
+      ? { $or: [{ _id: mongoose.Types.ObjectId.isValid(clusterId) ? clusterId : null }, { vehicleClusterOwnerId: clusterId }], 'vehicleClusterDetails.email': email }
+      : { 'vehicleClusterDetails.email': email };
+
+    const cluster = await VehicleCluster.findOne(query);
     if (!cluster) {
-      return res.status(404).json({ success: false, message: "Cluster not found" });
+      return res.status(404).json({ success: false, message: "Invalid Cluster ID or Owner Email." });
     }
 
-    cluster.kyc.aadhaar = aadhaar;
-    cluster.kyc.kycStatus = 'Pending'; // सबमिट होने के बाद वेरिफिकेशन के लिए पेंडिंग रहेगी
-    await cluster.save();
+    if (cluster.vehicleClusterDetails.password !== password) {
+      return res.status(401).json({ success: false, message: "Incorrect password. Credentials mismatch." });
+    }
 
-    res.status(200).json({ success: true, message: "KYC details submitted successfully, pending review.", data: { kycId: cluster.kyc.id } });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
-
-// 6. Super Admin: KYC स्टेटस पास या फेल (Verified/Rejected) करना
-exports.verifyKycStatus = async (req, res) => {
-  try {
-    const clusterId = req.params.kycId || req.params.clusterId;
-    const { kycStatus } = req.body; // 'Verified' या 'Rejected'
-
-    if (!['Verified', 'Rejected'].includes(kycStatus)) {
-      return res.status(400).json({
-        success: false,
-        message: 'kycStatus must be either Verified or Rejected'
+    const currentStatus = cluster.vehicleClusterDetails.status;
+    if (currentStatus === 'Restricted' || currentStatus === 'Rejected') {
+      return res.status(403).json({ 
+        success: false, 
+        message: `You are restricted to login. Your account status is currently ${currentStatus}. Please contact the Super Admin.` 
       });
     }
 
-    const lookup = [
-      { 'kyc.id': clusterId },
-      { vehicleClusterOwnerId: clusterId }
-    ];
-    if (mongoose.Types.ObjectId.isValid(clusterId)) lookup.push({ _id: clusterId });
-    const cluster = await VehicleCluster.findOne({ $or: lookup });
-    if (!cluster) {
-      return res.status(404).json({ success: false, message: "Cluster not found" });
-    }
-
-    cluster.kyc.kycStatus = kycStatus;
+    const clientIp = req.ip || req.headers['x-forwarded-for'] || 'Unknown IP';
+    cluster.loginHistory.push({
+      loginTime: new Date(),
+      ipAddress: clientIp
+    });
     await cluster.save();
 
     res.status(200).json({
       success: true,
-      message: `KYC status updated to ${kycStatus}`,
+      message: "Owner login verified successfully",
       data: {
-        kyc: {
-          id: cluster.kyc.id,
-          status: cluster.kyc.kycStatus
-        },
-        personDetails: {
-          ownerId: cluster.vehicleClusterOwnerId,
-          ownerName: cluster.vehicleClusterOwnerName,
-          profile: {
-            ownerName: cluster.vehicleClusterDetails.ownerName,
-            pan: cluster.vehicleClusterDetails.pan,
-            email: cluster.vehicleClusterDetails.email,
-            image: cluster.vehicleClusterDetails.image
-          }
-        },
-        clusterDetails: {
-          id: cluster._id,
-          location: cluster.vehicleClusterLocation,
-          vehicleCapacity: cluster.vehicleCapacity,
-          status: cluster.vehicleClusterDetails.status
-        }
+        clusterId: cluster._id,
+        ownerId: cluster.vehicleClusterOwnerId,
+        ownerName: cluster.vehicleClusterDetails.ownerName || cluster.vehicleClusterOwnerName,
+        email: cluster.vehicleClusterDetails.email,
+        status: currentStatus,
+        loginHistoryCount: cluster.loginHistory.length
       }
     });
   } catch (error) {
@@ -345,7 +325,167 @@ exports.verifyKycStatus = async (req, res) => {
   }
 };
 
-// 7. Cluster Owner / Manager: अपने क्लस्टर में नया व्हीकल ऑपरेटर जोड़ना
+exports.submitKyc = async (req, res) => {
+  try {
+    const clusterId = req.params.id;
+    const { pan, documentUrl } = req.body;
+
+    if (!pan || !documentUrl) {
+      return res.status(400).json({
+        success: false,
+        message: "Government ID number and Document URL are required."
+      });
+    }
+
+    const cluster = await VehicleCluster.findOne({
+      $or: [
+        ...(mongoose.Types.ObjectId.isValid(clusterId) ? [{ _id: clusterId }] : []),
+        { vehicleClusterOwnerId: clusterId },
+        { "kyc.kycId": clusterId }
+      ]
+    });
+
+    if (!cluster) {
+      return res.status(404).json({ success: false, message: "Cluster record not found." });
+    }
+
+    const existingKycId = cluster.kyc?.kycId || ("KYC-" + Math.floor(100000 + Math.random() * 900000));
+
+    // Update KYC details and reset status to Pending for re-submission
+    cluster.kyc = {
+      kycId: existingKycId,
+      pan: pan,
+      documentUrl: documentUrl,
+      kycStatus: "Pending",
+      rejectionReason: "",
+      submittedAt: new Date()
+    };
+
+    await cluster.save();
+
+    res.status(200).json({
+      success: true,
+      message: "KYC submitted successfully. Status is now Pending.",
+      data: cluster.kyc
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// 2. GET KYC STATUS & DETAILS (Check current status & ID)
+exports.getKycStatus = async (req, res) => {
+  try {
+    const clusterId = req.params.id;
+
+    const cluster = await VehicleCluster.findOne({
+      $or: [
+        ...(mongoose.Types.ObjectId.isValid(clusterId) ? [{ _id: clusterId }] : []),
+        { vehicleClusterOwnerId: clusterId },
+        { "kyc.kycId": clusterId }
+      ]
+    });
+
+    if (!cluster) {
+      return res.status(404).json({ success: false, message: "Cluster record not found." });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        clusterId: cluster._id,
+        ownerId: cluster.vehicleClusterOwnerId,
+        kyc: cluster.kyc
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// 3. ADMIN: VERIFY OR REJECT KYC STATUS
+exports.verifyKycStatus = async (req, res) => {
+  try {
+    const clusterId = req.params.id;
+    const { kycStatus, rejectionReason } = req.body;
+
+    if (!['Verified', 'Rejected'].includes(kycStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "kycStatus must be either 'Verified' or 'Rejected'."
+      });
+    }
+
+    const cluster = await VehicleCluster.findOne({
+      $or: [
+        ...(mongoose.Types.ObjectId.isValid(clusterId) ? [{ _id: clusterId }] : []),
+        { vehicleClusterOwnerId: clusterId },
+        { "kyc.kycId": clusterId }
+      ]
+    });
+
+    if (!cluster) {
+      return res.status(404).json({ success: false, message: "Cluster record not found." });
+    }
+
+    cluster.kyc.kycStatus = kycStatus;
+    if (kycStatus === 'Verified') {
+      cluster.kyc.rejectionReason = "";
+      if (cluster.vehicleClusterDetails) {
+        cluster.vehicleClusterDetails.status = 'Active';
+      }
+    } else if (kycStatus === 'Rejected') {
+      cluster.kyc.rejectionReason = rejectionReason || "Documents did not meet the requirements.";
+    }
+
+    await cluster.save();
+
+    res.status(200).json({
+      success: true,
+      message: `KYC status updated to ${kycStatus}`,
+      data: cluster.kyc
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// 4. ADMIN: GET ALL KYC REQUESTS (Categorized: Pending, Rejected, Verified)
+// Example Controller Function for Backend
+exports.getAllKycRequests = async (req, res) => {
+  try {
+    const { status = 'Pending', page = 1, limit = 5 } = req.query;
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 5;
+    const skip = (pageNum - 1) * limitNum;
+
+    // Strict query matching the exact kycStatus in database
+    const query = {
+      "kyc.kycStatus": status,
+      "kyc.pan": { $exists: true, $ne: "" }
+    };
+
+    const totalRequests = await VehicleCluster.countDocuments(query);
+    const clusters = await VehicleCluster.find(query)
+      .skip(skip)
+      .limit(limitNum)
+      .sort({ "kyc.submittedAt": -1, createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      data: clusters,
+      currentPage: pageNum,
+      totalPages: Math.ceil(totalRequests / limitNum) || 1,
+      totalItems: totalRequests
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.addVehicleOperator = async (req, res) => {
   try {
     const { clusterId } = req.params;
@@ -356,7 +496,6 @@ exports.addVehicleOperator = async (req, res) => {
       return res.status(404).json({ success: false, message: "Cluster not found" });
     }
 
-    // 10 डिजिट की ऑटो-जनरेटेड व्हीकल आईडी यदि न दी गई हो
     if (!operatorData.vehicleId) {
       const randomVehNum = Math.floor(1000000000 + Math.random() * 9000000000);
       operatorData.vehicleId = `EV-${randomVehNum}`;
@@ -371,39 +510,120 @@ exports.addVehicleOperator = async (req, res) => {
   }
 };
 
-// 8. Cluster Owner / Manager: क्लस्टर के व्हीकल ऑपरेटर्स की सूची देखना (Get)
 exports.getVehicleOperators = async (req, res) => {
   try {
     const { clusterId } = req.params;
-
     const cluster = await VehicleCluster.findById(clusterId).select('AllEV_vehicleoperator vehicleClusterOwnerName vehicleCapacity');
     if (!cluster) {
       return res.status(404).json({ success: false, message: "Cluster not found" });
     }
-
     res.status(200).json({ success: true, data: cluster.AllEV_vehicleoperator });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
-// 9. Cluster Owner / Manager: क्लस्टर से व्हीकल ऑपरेटर हटाना (Delete)
 exports.deleteVehicleOperator = async (req, res) => {
   try {
     const { clusterId, operatorRecordId } = req.params;
-
     const cluster = await VehicleCluster.findById(clusterId);
     if (!cluster) {
       return res.status(404).json({ success: false, message: "Cluster not found" });
     }
-
     cluster.AllEV_vehicleoperator = cluster.AllEV_vehicleoperator.filter(
       (op) => op._id.toString() !== operatorRecordId
     );
-
     await cluster.save();
     res.status(200).json({ success: true, message: "Vehicle operator record removed successfully", data: cluster });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+exports.verifyOwnerLogin = async (req, res) => {
+  try {
+    const { clusterId, email, password } = req.body;
+
+    if (!clusterId || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Cluster ID / Owner ID and Password are required."
+      });
+    }
+
+    // Lookup cluster by MongoDB _id OR vehicleClusterOwnerId
+    const queryConditions = [];
+
+    if (mongoose.Types.ObjectId.isValid(clusterId)) {
+      queryConditions.push({ _id: clusterId });
+    }
+    queryConditions.push({ vehicleClusterOwnerId: clusterId });
+
+    const cluster = await VehicleCluster.findOne({ $or: queryConditions });
+
+    if (!cluster) {
+      return res.status(404).json({
+        success: false,
+        message: "Invalid Cluster ID or Owner ID. Record not found."
+      });
+    }
+
+    // Email validation check (if provided in request)
+    if (email && cluster.vehicleClusterDetails?.email) {
+      if (cluster.vehicleClusterDetails.email.toLowerCase() !== email.toLowerCase()) {
+        return res.status(401).json({
+          success: false,
+          message: "Email ID does not match with this cluster record."
+        });
+      }
+    }
+
+    // Password validation check
+    const storedPassword = cluster.vehicleClusterDetails?.password;
+    if (storedPassword !== password) {
+      return res.status(401).json({
+        success: false,
+        message: "Incorrect access password. Please try again."
+      });
+    }
+
+    // Status / Account Access Guard Check
+    const currentStatus = cluster.vehicleClusterDetails?.status || "Pending";
+    if (currentStatus === "Restricted" || currentStatus === "Rejected") {
+      return res.status(403).json({
+        success: false,
+        message: `Login Access Denied. Your account status is currently set to '${currentStatus}'. Please contact Super Admin.`
+      });
+    }
+
+    // Record login timestamp & IP in loginHistory array
+    const clientIp = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+    if (!cluster.loginHistory) cluster.loginHistory = [];
+    cluster.loginHistory.push({
+      loginTime: new Date(),
+      ipAddress: clientIp
+    });
+
+    await cluster.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Authentication successful",
+      data: {
+        clusterId: cluster._id,
+        ownerId: cluster.vehicleClusterOwnerId,
+        ownerName: cluster.vehicleClusterDetails?.ownerName || cluster.vehicleClusterOwnerName,
+        email: cluster.vehicleClusterDetails?.email,
+        status: currentStatus,
+        kycStatus: cluster.kyc?.kycStatus || "Pending"
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Internal server error during verification.",
+      error: error.message
+    });
   }
 };

@@ -15,34 +15,40 @@ const {
   updateCapacity,
   updateLocation,
   updateOwnerDetails,
-  submitKycDetails,
+  submitKyc,
   verifyKycStatus,
   addVehicleOperator,
   getVehicleOperators,
-  deleteVehicleOperator
+  deleteVehicleOperator,
+  verifyOwnerLogin,
+  getKycStatus,
+  getAllKycRequests
 } = require('../controllers/clusterController');
 
-// --- SUPER ADMIN ROUTES ---
-router.get('/kyc-status', verifySuperAdmin, getClustersByKycStatus);
-router.get('/mine', verifyClusterOwner, getOwnedCluster);
+// --- SUPER ADMIN & CRM ROUTES ---
+router.get('/kyc-status', verifySuperAdmin, getClustersByKycStatus); // Used by cluster-queries-api.js
+router.get('/mine', verifyClusterOwner, getOwnedCluster); // Used by cluster-owner-api.js
+router.get('/admin/kyc-requests', verifySuperAdmin, getAllKycRequests); // Admin CRM list
+
+// Admin KYC Verification (Exact match for super-admin-api.js: `PUT /:targetId/kyc-verify/:targetId`)
+router.put('/admin/kyc-verify/:id/status', verifySuperAdmin, verifyKycStatus);
+// --- GENERAL CLUSTER ROUTES ---
 router.get('/', verifySuperAdmin, getClusters);
-router.get('/:id', verifySuperAdmin, getCluster);
 router.post('/create', verifySuperAdmin, createCluster);
+router.post('/verify-login', verifyOwnerLogin);
+
+// --- SPECIFIC CLUSTER ID ROUTES ---
+router.get('/:id', verifySuperAdmin, getCluster);
 router.delete('/:id', verifySuperAdmin, deleteCluster);
 router.put('/:id/capacity', verifySuperAdmin, updateCapacity);
 router.put('/:id/location', verifySuperAdmin, updateLocation);
-router.put('/kyc/:kycId/status', verifySuperAdmin, verifyKycStatus);
-router.put('/:clusterId/kyc', verifySuperAdmin, verifyKycStatus);
-router.put('/:id/kyc-verify/:clusterId', verifySuperAdmin, verifyKycStatus);
+router.put('/:id/owner-details', verifySuperAdmin, updateOwnerDetails);
 
-// --- SHARED / OWNER DETAILS ROUTE ---
-router.put('/:id/owner-details', updateOwnerDetails);
+// --- CLUSTER OWNER KYC ROUTES (Exact match for cluster-owner-api.js) ---
+router.put('/:id/submit-kyc', verifyClusterOwner, submitKyc); //[cite: 7] Matches cluster-owner-api.js PUT method
+router.get('/:id/kyc', verifyClusterOwner, getKycStatus);
 
-// --- CLUSTER OWNER / MANAGER ROUTES ---
-// ओनर केवल अपनी केवाईसी (आधार) सबमिट कर सकता है (स्टेटस पास/फेल एडमिन करेगा)
-router.put('/:clusterId/submit-kyc', verifyClusterOwner, submitKycDetails);
-
-// व्हीकल ऑपरेटर ऑपरेशंस (Add, Get, Delete) क्लस्टर ओनर द्वारा क्लस्टर आईडी के माध्यम से
+// --- VEHICLE OPERATOR ROUTES ---
 router.post('/:clusterId/operators', verifyClusterOwner, addVehicleOperator);
 router.get('/:clusterId/operators', verifyClusterOwner, getVehicleOperators);
 router.delete('/:clusterId/operators/:operatorRecordId', verifyClusterOwner, deleteVehicleOperator);
