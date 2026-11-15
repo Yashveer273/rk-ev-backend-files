@@ -22,7 +22,7 @@ const {
   deleteVehicleOperator,
   verifyOwnerLogin,
   getKycStatus,
-  getAllKycRequests
+  getAllKycRequests,assignVehiclesBulk,updateAssignedVehicle,removeVehicleFromCluster,getClusterVehicles
 } = require('../controllers/clusterController');
 
 // --- SUPER ADMIN & CRM ROUTES ---
@@ -52,5 +52,9 @@ router.get('/:id/kyc', verifyClusterOwner, getKycStatus);
 router.post('/:clusterId/operators', verifyClusterOwner, addVehicleOperator);
 router.get('/:clusterId/operators', verifyClusterOwner, getVehicleOperators);
 router.delete('/:clusterId/operators/:operatorRecordId', verifyClusterOwner, deleteVehicleOperator);
-
+// --- BULK VEHICLE ASSIGNMENT & MANAGEMENT ROUTES ---
+router.get('/:clusterId/vehicles', verifyClusterOwner, getClusterVehicles);
+router.post('/:clusterId/vehicles/bulk-assign', verifyClusterOwner, assignVehiclesBulk); // POST API (Bulk Assign)
+router.put('/:clusterId/vehicles/:vehicleId', verifyClusterOwner, updateAssignedVehicle);       // PUT API (Update Details)
+router.delete('/:clusterId/vehicles/:vehicleId', verifyClusterOwner, removeVehicleFromCluster); // DELETE API (Remove/Unassign)
 module.exports = router;

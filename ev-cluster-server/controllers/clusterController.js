@@ -4,6 +4,12 @@ const VehicleCluster = require('../models/VehicleCluster');
 const splitValues = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+
+const EVClusterHistory = require('../models/EVClusterHistory');
+
+
+
+
 exports.getClusters = async (req, res) => {
   try {
     const conditions = [];
@@ -169,9 +175,9 @@ exports.createCluster = async (req, res) => {
       return res.status(400).json({ success: false, message: "Owner email and access password are required." });
     }
 
+    // Generate unique Owner ID
     const randomNum = Math.floor(1000 + Math.random() * 9000);
     const vehicleClusterOwnerId = `VCO-${randomNum}`;
-    const kycId = `KYC-${randomNum}`;
 
     const newCluster = new VehicleCluster({
       vehicleClusterLocation,
@@ -182,17 +188,20 @@ exports.createCluster = async (req, res) => {
         ...vehicleClusterDetails,
         status: 'Pending'
       },
-      kyc: {
-        id: kycId,
-        pan: null,
-        kycStatus: 'Pending'
-      },
+      // KYC को यहाँ से पूरी तरह हटा दिया गया है, क्योंकि यह क्रिएशन टाइम पर जरूरी नहीं है 
+      // (इसे यूजर बाद में KYC सबमिट फॉर्म के जरिए अपडेट करेगा)
       loginHistory: [],
-      AllEV_vehicleoperator: []
+      vehicles: [] // या आपका पुराना नाम 'AllEV_vehicleoperator: []' जो भी आपके मॉडल में हो
     });
 
     await newCluster.save();
-    res.status(201).json({ success: true, message: "Vehicle cluster created successfully", data: newCluster });
+    
+    res.status(201).json({ 
+      success: true, 
+      message: "Vehicle cluster created successfully", 
+      data: newCluster 
+    });
+    
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -625,5 +634,286 @@ exports.verifyOwnerLogin = async (req, res) => {
       message: "Internal server error during verification.",
       error: error.message
     });
+  }
+};
+
+
+
+exports.assignVehiclesBulk = async (req, res) => {
+  try {
+    const { clusterId } = req.params;
+    const { vehicles } = req.body; 
+
+    if (!Array.isArray(vehicles) || vehicles.length === 0) {
+      return res.status(400).json({ success: false, message: "Vehicles array is required and cannot be empty." });
+    }
+
+    const cluster = await VehicleCluster.findById(clusterId);
+    if (!cluster) {
+      return res.status(404).json({ success: false, message: "Cluster not found." });
+    }
+
+    const existingVehicleIds = new Set(cluster.vehicles.map(v => v.vehicleId));
+    const vehiclePayloadForFleet = []; // 👈 यहाँ हम vehicleId और historyId दोनों भेजेंगे
+
+    for (let incomingVehicle of vehicles) {
+      const { vehicleId } = incomingVehicle;
+
+      if (!vehicleId) {
+        return res.status(400).json({ success: false, message: "Each vehicle object must contain a vehicleId." });
+      }
+
+      if (existingVehicleIds.has(vehicleId)) {
+        return res.status(400).json({ success: false, message: `Vehicle ID ${vehicleId} already exists in this cluster.` });
+      }
+
+      const newVehicleEntry = {
+        vehicleId: vehicleId,
+        investorId: null,
+        assignVehicleAt: new Date().toISOString(),
+        removeVehicleAt: null,
+        operatorInfo: {
+          operatorId: null,
+          startDate: null,
+          endDate: null,
+          status: 'Pending'
+        }
+      };
+
+      cluster.vehicles.push(newVehicleEntry);
+      existingVehicleIds.add(vehicleId);
+
+      // History Management (EVClusterHistory)
+      let historyRecord = await EVClusterHistory.findOne({ vehicleId });
+      if (!historyRecord) {
+        historyRecord = new EVClusterHistory({
+          vehicleId,
+          associations: [
+            {
+              clusterId: cluster._id.toString(),
+              assignedAt: new Date(),
+              unassignedAt: null,
+              status: 'Active'
+            }
+          ]
+        });
+      } else {
+        historyRecord.associations.forEach(assoc => {
+          if (assoc.status === 'Active') {
+            assoc.status = 'Transferred';
+            assoc.unassignedAt = new Date();
+          }
+        });
+
+        historyRecord.associations.push({
+          clusterId: cluster._id.toString(),
+          assignedAt: new Date(),
+          unassignedAt: null,
+          status: 'Active'
+        });
+      }
+      await historyRecord.save();
+
+      // 👈 इस वाहन की History ID को पेलोड में जोड़ें
+      vehiclePayloadForFleet.push({
+        vehicleId: vehicleId,
+        historyReferenceId: historyRecord._id.toString()
+      });
+    }
+
+    await cluster.save();
+
+    // ==========================================
+    // Server-to-Server Call to EV Fleet Server
+    // ==========================================
+    try {
+      const fleetServerUrl = 'http://localhost:5003';
+      
+      const syncResponse = await fetch(`${fleetServerUrl}/api/vehicle-assign-closter-info/bulk-assign-with-history`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clusterId: cluster._id.toString(),
+          vehicles: vehiclePayloadForFleet // 👈 यहाँ हम एरे भेज रहे हैं जिसमें vehicleId और historyReferenceId दोनों हैं
+        })
+      });
+
+      const syncResult = await syncResponse.json();
+      if (!syncResult.success) {
+        console.error('Failed to sync assignment with EV Fleet Server:', syncResult.message);
+      } else {
+        console.log('Successfully synced assignment and history reference with EV Fleet Server.');
+      }
+    } catch (syncError) {
+      console.error('Failed to sync assignment with EV Fleet Server:', syncError.message);
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Vehicles assigned successfully in bulk and synced with fleet server.",
+      data: cluster
+    });
+
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// PUT API: क्लस्टर के अंदर असाइन किए गए व्हीकल का डेटा (Investor ID या Operator Info) अपडेट करने के लिए
+exports.updateAssignedVehicle = async (req, res) => {
+  try {
+    const { clusterId, vehicleId } = req.params;
+    const { investorId, operatorInfo } = req.body;
+
+    const cluster = await VehicleCluster.findById(clusterId);
+    if (!cluster) {
+      return res.status(404).json({ success: false, message: "Cluster not found." });
+    }
+
+    // क्लस्टर के vehicles एरे में से उस विशिष्ट वाहन को ढूंढें
+    const vehicleItem = cluster.vehicles.find(v => v.vehicleId === vehicleId);
+    if (!vehicleItem) {
+      return res.status(404).json({ success: false, message: "Vehicle not found in this cluster." });
+    }
+
+    // 1. Investor ID अपडेट करें यदि भेजा गया हो
+    if (investorId !== undefined) {
+      vehicleItem.investorId = investorId;
+    }
+
+    // 2. Operator Info अपडेट करें यदि भेजा गया हो
+    if (operatorInfo) {
+      if (operatorInfo.operatorId !== undefined) vehicleItem.operatorInfo.operatorId = operatorInfo.operatorId;
+      if (operatorInfo.startDate !== undefined) vehicleItem.operatorInfo.startDate = operatorInfo.startDate;
+      if (operatorInfo.endDate !== undefined) vehicleItem.operatorInfo.endDate = operatorInfo.endDate;
+      if (operatorInfo.status !== undefined) vehicleItem.operatorInfo.status = operatorInfo.status;
+    }
+
+    await cluster.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Vehicle details updated successfully in cluster.",
+      data: vehicleItem
+    });
+
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// 3. DELETE API: क्लस्टर से व्हीकल को हटाने (Unassign/Remove) के लिए
+exports.removeVehicleFromCluster = async (req, res) => {
+  try {
+    const { clusterId, vehicleId } = req.params;
+
+    const cluster = await VehicleCluster.findById(clusterId);
+    if (!cluster) {
+      return res.status(404).json({ success: false, message: "Cluster not found." });
+    }
+
+    const vehicleItem = cluster.vehicles.find(v => v.vehicleId === vehicleId);
+    if (!vehicleItem) {
+      return res.status(404).json({ success: false, message: "Vehicle not found in this cluster." });
+    }
+
+    // रिमूवल टाइम सेट करें
+    vehicleItem.removeVehicleAt = new Date().toISOString();
+
+    // एरे से फिल्टर करके हटा रहे हैं
+    cluster.vehicles = cluster.vehicles.filter(v => v.vehicleId !== vehicleId);
+    await cluster.save();
+
+    // हिस्ट्री अपडेट करें (Unassigned status करें)
+    const historyRecord = await EVClusterHistory.findOne({ vehicleId });
+    if (historyRecord) {
+      historyRecord.associations.forEach(assoc => {
+        if (assoc.clusterId === clusterId.toString() && assoc.status === 'Active') {
+          assoc.status = 'Unassigned';
+          assoc.unassignedAt = new Date();
+        }
+      });
+      await historyRecord.save();
+    }
+
+    // ==========================================
+    // Server-to-Server DELETE Call to EV Fleet Server
+    // ==========================================
+    try {
+      const fleetServerUrl = 'http://localhost:5003';
+      
+      const syncResponse = await fetch(`${fleetServerUrl}/api/vehicle-assign-closter-info/${vehicleId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      const syncResult = await syncResponse.json();
+      if (!syncResult.success) {
+        console.error('Failed to sync vehicle removal with EV Fleet Server:', syncResult.message);
+      } else {
+        console.log(`Vehicle ${vehicleId} successfully unassigned on EV Fleet Server.`);
+      }
+    } catch (syncError) {
+      console.error('Failed to sync vehicle removal with EV Fleet Server:', syncError.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Vehicle removed from cluster successfully and synced with fleet server.",
+      data: { vehicleId, removeVehicleAt: vehicleItem.removeVehicleAt }
+    });
+
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+
+// GET: पेजिनेशन और व्हीकल आईडी सर्च के साथ क्लस्टर के व्हीकल्स प्राप्त करना
+exports.getClusterVehicles = async (req, res) => {
+  try {
+    const { clusterId } = req.params;
+    const { page = 1, limit = 30, search = '' } = req.query;
+
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 30;
+    const skip = (pageNum - 1) * limitNum;
+
+    const filter = mongoose.Types.ObjectId.isValid(clusterId)
+      ? { _id: clusterId }
+      : { vehicleClusterOwnerId: clusterId };
+
+    const cluster = await VehicleCluster.findOne(filter)
+      .select('vehicles vehicleClusterOwnerName vehicleCapacity');
+
+    if (!cluster) {
+      return res.status(404).json({ success: false, message: "Cluster not found" });
+    }
+
+    let vehiclesList = cluster.vehicles || [];
+
+    // यदि सर्च टर्म (vehicleId) दिया गया है, तो फ़िल्टर करें
+    if (search && search.trim() !== '') {
+      const searchTerm = search.trim().toLowerCase();
+      vehiclesList = vehiclesList.filter(v => 
+        v.vehicleId && v.vehicleId.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    const totalVehicles = vehiclesList.length;
+    
+    // फ़िल्टर किए गए डेटा पर पेजिनेशन लागू करना (Slice)
+    const paginatedVehicles = vehiclesList.slice(skip, skip + limitNum);
+
+    res.status(200).json({ 
+      success: true, 
+      currentPage: pageNum,
+      totalPages: Math.ceil(totalVehicles / limitNum) || 1,
+      totalRecords: totalVehicles,
+      count: paginatedVehicles.length, 
+      data: paginatedVehicles 
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 };

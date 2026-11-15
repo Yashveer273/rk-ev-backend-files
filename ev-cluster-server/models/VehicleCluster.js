@@ -25,37 +25,33 @@ const vehicleClusterSchema = new mongoose.Schema({
     image: { type: String },
     status: { type: String, enum: ['Active', 'Verified', 'Pending', 'Rejected', 'Restricted'], default: 'Pending', index: true }
   },
- // VehicleCluster Schema ke andar kyc sub-schema mein 'documentUrl' add karein:
-kyc: {
-kycId: { 
-    type: String, 
-    default: () => "KYC-" + Math.floor(100000 + Math.random() * 900000) 
+  kyc: {
+    kycId: { 
+      type: String, 
+    },
+    pan: { type: String,  },
+    documentUrl: { type: String },
+    kycStatus: { type: String, enum: ['Pending', 'Verified', 'Rejected'] },
+    rejectionReason: { type: String, default: '' },
+    submittedAt: { type: Date,  }
   },
-  pan: { type: String, required: true },
-  documentUrl: { type: String, required: true },
-  kycStatus: { type: String, enum: ['Pending', 'Verified', 'Rejected'], default: 'Pending' },
-  rejectionReason: { type: String, default: '' },
-  submittedAt: { type: Date, default: Date.now }
-},
   loginHistory: [
     {
       loginTime: { type: Date, default: Date.now },
       ipAddress: { type: String }
     }
   ],
-  AllEV_vehicleoperator: [
+  vehicles: [
     {
-      vehicleId: { type: String, index: true },
-      investorId: { type: String },
-      operatorId: { type: String },
-      startDate: { type: String },
-      endDate: { type: String },
-      service: {
+      vehicleId: { type: String, unique: true, sparse: true, index: true },
+      investorId: { type: String, unique: true, sparse: true, index: true },
+      assignVehicleAt: { type: String },
+      removeVehicleAt: { type: String },
+      operatorInfo: { 
+        operatorId: { type: String, unique: true, sparse: true, index: true },
         startDate: { type: String },
         endDate: { type: String },
-        status: { type: String, enum: ['Active', 'Pending', 'Completed', 'Expired'], default: 'Pending' },
-        operatorPaymentAmount: { type: Number },
-        investorPaymentAmount: { type: Number }
+        status: { type: String, enum: ['Active', 'Pending', 'Expired'], default: 'Pending' }
       }
     }
   ]
