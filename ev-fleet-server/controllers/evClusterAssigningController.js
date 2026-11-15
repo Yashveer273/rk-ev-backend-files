@@ -5,64 +5,55 @@
 
 const EVVehicle = require('../models/EVVehicle');
 
-/**
- * 1. Assign New Cluster to Vehicle (POST / PUT)
- */
-exports.assignVehicleCluster = async (req, res) => {
+
+exports.bulkAssignVehiclesWithHistory = async (req, res) => {
   try {
-    const { vehicleId, clusterId } = req.body;
+    const { clusterId, vehicles } = req.body; // 👈 यहाँ vehicles (एरे ऑफ ऑब्जेक्ट्स) रिसीव करें
 
-    if (!vehicleId || !clusterId) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Vehicle ID and Cluster ID are required' 
-      });
-    }
-
-    const vehicle = await EVVehicle.findOne({ vehicleId });
-    if (!vehicle) {
-      return res.status(404).json({ success: false, error: 'Vehicle not found in fleet database' });
+    if (!clusterId || !Array.isArray(vehicles) || vehicles.length === 0) {
+      return res.status(400).json({ success: false, error: 'Cluster ID and vehicles array are required' });
     }
 
     const currentDate = new Date();
+    const updatedVehicles = [];
 
-    // Current active cluster update karein
-    vehicle.associateCluster = {
-      clusterId: clusterId,
-      assignedAt: currentDate
-    };
+    for (const item of vehicles) {
+      const { vehicleId, historyReferenceId } = item; // 👈 vehicleId और historyReferenceId दोनों निकालें
 
-    await vehicle.save();
+      const vehicle = await EVVehicle.findOne({ vehicleId });
+      if (!vehicle) continue;
 
-    res.status(200).json({
-      success: true,
-      message: 'Vehicle successfully assigned to the cluster',
-      data: {
-        vehicleId: vehicle.vehicleId,
-        associateCluster: vehicle.associateCluster
+      // 1. Update Active Cluster
+      vehicle.associateCluster = {
+        clusterId: clusterId.toString(),
+        assignedAt: currentDate
+      };
+
+      // 2. 👈 Update History Reference ID in EVVehicle model
+      if (historyReferenceId) {
+        vehicle.clusterAssociationHistory = String(historyReferenceId);
       }
+      
+      await vehicle.save();
+      updatedVehicles.push(vehicleId);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Fleet server successfully updated vehicle cluster associations and history references',
+      data: updatedVehicles
     });
 
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, error: error.message });
   }
 };
-
-
-/**
- * 2. Link Cluster Association History Reference ID (POST / PUT / DELETE / GET)
- */
-
-// POST: Pehli baar history reference ID link karne ke liye (Agar pehle se hai toh dobara post allow nahi hoga)
-exports.linkClusterHistoryIdPost = async (req, res) => {
+exports.unassignVehicleFromCluster = async (req, res) => {
   try {
-    const { vehicleId, historyReferenceId } = req.body;
+    const { vehicleId } = req.params;
 
-    if (!vehicleId || !historyReferenceId) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Vehicle ID and History Reference ID are required' 
-      });
+    if (!vehicleId) {
+      return res.status(400).json({ success: false, error: 'Vehicle ID is required' });
     }
 
     const vehicle = await EVVehicle.findOne({ vehicleId });
@@ -70,32 +61,26 @@ exports.linkClusterHistoryIdPost = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Vehicle not found in fleet database' });
     }
 
-    // Validation: Agar pehle se history ID set hai, toh POST ke through dobara nahi karne denge
-    if (vehicle.clusterAssociationHistory) {
-      return res.status(409).json({
-        success: false,
-        error: 'Cluster association history already exists for this vehicle. Use PUT method to update.'
-      });
-    }
+    // रूट-लेवल associateCluster को null कर दें ताकि गाड़ी फिर से 'Free/Available' हो जाए
+    vehicle.associateCluster = {
+      clusterId: null,
+      assignedAt: null
+    };
 
-    vehicle.clusterAssociationHistory = String(historyReferenceId);
+    // (नोट: जैसा कि आपने कहा, clusterAssociationHistory को हटाने या छेड़ने की जरूरत नहीं है, वह पुरानी हिस्ट्री के लिए सुरक्षित रहेगी)
+
     await vehicle.save();
 
-    res.status(201).json({
+    return res.status(200).json({
       success: true,
-      message: 'Cluster association history reference linked successfully',
-      data: {
-        vehicleId: vehicle.vehicleId,
-        clusterAssociationHistory: vehicle.clusterAssociationHistory
-      }
+      message: 'Vehicle successfully unassigned from fleet database and returned to inventory',
+      data: { vehicleId: vehicle.vehicleId, associateCluster: vehicle.associateCluster }
     });
 
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, error: error.message });
   }
 };
-
-
 // PUT: Existing history reference ID ko update/edit karne ke liye
 exports.linkClusterHistoryIdPut = async (req, res) => {
   try {
