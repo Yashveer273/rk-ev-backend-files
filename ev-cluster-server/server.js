@@ -17,8 +17,8 @@ app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ success: false, error: 'Server Error' });
 });
-
+const HOST = process.env.HOST || "192.168.1.8";
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+app.listen(PORT,HOST, () => {
   console.log(`EV Cluster Server running on port ${PORT}`);
 });

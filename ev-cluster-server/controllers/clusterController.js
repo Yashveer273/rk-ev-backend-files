@@ -6,8 +6,328 @@ const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 
 const EVClusterHistory = require('../models/EVClusterHistory');
+const fleetServerUrl = `http://${process.env.HOST}:5003`;
+const STORE_PROJECTION = {
+  _id: 1,
+  vehicleClusterOwnerId: 1,
+  vehicleCapacity: 1,
+  'vehicleClusterLocation.lat': 1,
+  'vehicleClusterLocation.long': 1,
+  'vehicleClusterLocation.zipCode': 1,
+  'vehicleClusterLocation.state': 1,
+  'vehicleClusterLocation.city': 1,
+  'vehicleClusterLocation.streetAddress': 1,
+};
 
 
+
+
+
+function getDistanceKm(lat1, lon1, lat2, lon2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function toStoreModelJson(doc) {
+  const loc = doc.vehicleClusterLocation || {};
+  return {
+    _id: String(doc._id),
+    vehicleClusterOwnerId: doc.vehicleClusterOwnerId || '',
+    vehicleCapacity: Number(doc.vehicleCapacity) || 0,
+    vehicleClusterLocation: {
+      lat: Number(loc.lat) || 0,
+      long: Number(loc.long) || 0,
+      zipCode: loc.zipCode || '',
+      state: loc.state || '',
+      city: loc.city || '',
+      streetAddress: loc.streetAddress || '',
+    },
+  };
+}
+
+async function getRandomStores(size = 5) {
+  const docs = await VehicleCluster.aggregate([
+    { $sample: { size } },
+    { $project: STORE_PROJECTION },
+  ]);
+  return docs.map(toStoreModelJson);
+}
+
+function buildNearestFromPool(pool, { userLat, userLong, zipCode, city, state, streetAddress, q }) {
+  const zipSet = new Set(zipCode ? splitValues(zipCode).map((z) => z.toLowerCase()) : []);
+  const cityLower = city ? city.trim().toLowerCase() : '';
+  const stateLower = state ? state.trim().toLowerCase() : '';
+  const streetLower = streetAddress ? streetAddress.trim().toLowerCase() : '';
+  const qLower = q ? String(q).trim().toLowerCase() : '';
+
+  const scored = [];
+
+  for (const doc of pool) {
+    const loc = doc.vehicleClusterLocation || {};
+    const dZip = String(loc.zipCode || '').toLowerCase();
+    const dCity = String(loc.city || '').toLowerCase();
+    const dState = String(loc.state || '').toLowerCase();
+    const dStreet = String(loc.streetAddress || '').toLowerCase();
+
+    let matchScore = 0;
+    let isMatched = false;
+
+    if (zipSet.size && zipSet.has(dZip)) {
+      matchScore += 100;
+      isMatched = true;
+    }
+    if (cityLower && dCity === cityLower) {
+      matchScore += 60;
+      isMatched = true;
+    }
+    if (streetLower && dStreet.includes(streetLower)) {
+      matchScore += 50;
+      isMatched = true;
+    }
+    if (stateLower && dState === stateLower) {
+      matchScore += 30;
+      isMatched = true;
+    }
+    if (
+      qLower &&
+      (dZip.includes(qLower) ||
+        dCity.includes(qLower) ||
+        dState.includes(qLower) ||
+        dStreet.includes(qLower))
+    ) {
+      matchScore += 40;
+      isMatched = true;
+    }
+
+    const hasCoords =
+      userLat !== null &&
+      userLong !== null &&
+      typeof loc.lat === 'number' &&
+      typeof loc.long === 'number';
+
+    const distKm = hasCoords
+      ? getDistanceKm(userLat, userLong, loc.lat, loc.long)
+      : Number.POSITIVE_INFINITY;
+
+    if (hasCoords) isMatched = true;
+
+    scored.push({ doc, isMatched, matchScore, distKm });
+  }
+
+  const matchedOnly = scored.filter((item) => item.isMatched);
+  if (!matchedOnly.length) return null;
+
+  matchedOnly.sort((a, b) =>
+    b.matchScore !== a.matchScore ? b.matchScore - a.matchScore : a.distKm - b.distKm
+  );
+
+  const targetCount = Math.min(15, Math.max(10, matchedOnly.length));
+  const pickedIds = new Set();
+  const selected = [];
+
+  for (const item of matchedOnly.slice(0, targetCount)) {
+    const id = String(item.doc._id);
+    if (!pickedIds.has(id)) {
+      pickedIds.add(id);
+      selected.push(toStoreModelJson(item.doc));
+    }
+  }
+
+  if (selected.length < 10 && pool.length >= 10) {
+    const byDistance = [...scored].sort((a, b) => a.distKm - b.distKm);
+    for (const item of byDistance) {
+      if (selected.length >= 10) break;
+      const id = String(item.doc._id);
+      if (!pickedIds.has(id)) {
+        pickedIds.add(id);
+        selected.push(toStoreModelJson(item.doc));
+      }
+    }
+  }
+
+  return selected;
+}
+
+exports.getStoresForApp = async (req, res) => {
+  try {
+    const {
+      id,
+      ownerId,
+      ownerName,
+      q,
+      zipCode,
+      state,
+      city,
+      streetAddress,
+      lat,
+      long,
+      status,
+      kycStatus,
+      from,
+      to,
+    } = req.query;
+
+    let userLat = null;
+    let userLong = null;
+
+    if (lat !== undefined && lat !== '') {
+      userLat = Number(lat);
+      if (!Number.isFinite(userLat)) {
+        return res.status(400).json({ success: false, message: 'lat must be a valid number' });
+      }
+    }
+    if (long !== undefined && long !== '') {
+      userLong = Number(long);
+      if (!Number.isFinite(userLong)) {
+        return res.status(400).json({ success: false, message: 'long must be a valid number' });
+      }
+    }
+
+    const conditions = [];
+
+    if (id) {
+      const ids = splitValues(id);
+      const objectIds = ids.filter((v) => mongoose.Types.ObjectId.isValid(v));
+      const ownerIds = ids.filter((v) => !objectIds.includes(v));
+      const idOr = [];
+      if (objectIds.length) idOr.push({ _id: { $in: objectIds } });
+      if (ownerIds.length) idOr.push({ vehicleClusterOwnerId: { $in: ownerIds } });
+      if (idOr.length) conditions.push({ $or: idOr });
+    }
+
+    if (ownerId) {
+      conditions.push({ vehicleClusterOwnerId: { $in: splitValues(ownerId) } });
+    }
+
+    if (ownerName) {
+      const rx = new RegExp(escapeRegex(ownerName.trim()), 'i');
+      conditions.push({
+        $or: [{ vehicleClusterOwnerName: rx }, { 'vehicleClusterDetails.ownerName': rx }],
+      });
+    }
+
+    if (zipCode) {
+      conditions.push({ 'vehicleClusterLocation.zipCode': { $in: splitValues(zipCode) } });
+    }
+    if (state) {
+      conditions.push({
+        'vehicleClusterLocation.state': new RegExp(`^${escapeRegex(state.trim())}$`, 'i'),
+      });
+    }
+    if (city) {
+      conditions.push({
+        'vehicleClusterLocation.city': new RegExp(`^${escapeRegex(city.trim())}$`, 'i'),
+      });
+    }
+    if (streetAddress) {
+      conditions.push({
+        'vehicleClusterLocation.streetAddress': new RegExp(escapeRegex(streetAddress.trim()), 'i'),
+      });
+    }
+
+    if (q && String(q).trim()) {
+      const qRx = new RegExp(escapeRegex(String(q).trim()), 'i');
+      conditions.push({
+        $or: [
+          { vehicleClusterOwnerId: qRx },
+          { 'vehicleClusterLocation.zipCode': qRx },
+          { 'vehicleClusterLocation.state': qRx },
+          { 'vehicleClusterLocation.city': qRx },
+          { 'vehicleClusterLocation.streetAddress': qRx },
+        ],
+      });
+    }
+
+    if (status) {
+      conditions.push({ 'vehicleClusterDetails.status': { $in: splitValues(status) } });
+    }
+    if (kycStatus) {
+      conditions.push({ 'kyc.kycStatus': { $in: splitValues(kycStatus) } });
+    }
+
+    const createdAt = {};
+    if (from) {
+      createdAt.$gte = new Date(from);
+      if (Number.isNaN(createdAt.$gte.getTime())) {
+        return res.status(400).json({ success: false, message: 'from must be a valid date' });
+      }
+    }
+    if (to) {
+      createdAt.$lte = new Date(to);
+      if (Number.isNaN(createdAt.$lte.getTime())) {
+        return res.status(400).json({ success: false, message: 'to must be a valid date' });
+      }
+    }
+    if (Object.keys(createdAt).length) conditions.push({ createdAt });
+
+    const hasSearchFilter = conditions.length > 0;
+    const searchFilter = conditions.length > 1 ? { $and: conditions } : conditions[0] || {};
+    const hasLocationInput =
+      (userLat !== null && userLong !== null) ||
+      Boolean(zipCode || city || state || streetAddress || (q && String(q).trim()));
+
+    const randomCount = Math.floor(Math.random() * 2) + 4; // 4 or 5
+
+    // Fast path: No search filter -> single query powers both arrays
+    if (!hasSearchFilter) {
+      const allDocs = await VehicleCluster.find({}, STORE_PROJECTION).lean();
+      const searchStores = allDocs.map(toStoreModelJson);
+
+      let nearestStores = [];
+      if (hasLocationInput && allDocs.length) {
+        nearestStores =
+          buildNearestFromPool(allDocs, {
+            userLat,
+            userLong,
+            zipCode,
+            city,
+            state,
+            streetAddress,
+            q,
+          }) || (await getRandomStores(randomCount));
+      } else if (allDocs.length) {
+        nearestStores = searchStores.slice(0, Math.min(searchStores.length, randomCount));
+      }
+
+      return res.status(200).json({ nearestStores, searchStores });
+    }
+
+    // Filtered search path
+    const matchedDocs = await VehicleCluster.find(searchFilter, STORE_PROJECTION).lean();
+    const searchStores = matchedDocs.map(toStoreModelJson);
+
+    let nearestStores = [];
+    if (hasLocationInput) {
+      const pool =
+        matchedDocs.length >= 10
+          ? matchedDocs
+          : await VehicleCluster.find({}, STORE_PROJECTION).lean();
+
+      nearestStores =
+        buildNearestFromPool(pool, {
+          userLat,
+          userLong,
+          zipCode,
+          city,
+          state,
+          streetAddress,
+          q,
+        }) || (await getRandomStores(randomCount));
+    } else {
+      nearestStores = await getRandomStores(randomCount);
+    }
+
+    return res.status(200).json({ nearestStores, searchStores });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 
 exports.getClusters = async (req, res) => {
@@ -556,7 +876,7 @@ exports.verifyOwnerLogin = async (req, res) => {
     if (!clusterId || !password) {
       return res.status(400).json({
         success: false,
-        message: "Cluster ID / Owner ID and Password are required."
+        message: "Cluster ID / Owner ID and Password are required.",
       });
     }
 
@@ -573,16 +893,19 @@ exports.verifyOwnerLogin = async (req, res) => {
     if (!cluster) {
       return res.status(404).json({
         success: false,
-        message: "Invalid Cluster ID or Owner ID. Record not found."
+        message: "Invalid Cluster ID or Owner ID. Record not found.",
       });
     }
 
     // Email validation check (if provided in request)
     if (email && cluster.vehicleClusterDetails?.email) {
-      if (cluster.vehicleClusterDetails.email.toLowerCase() !== email.toLowerCase()) {
+      if (
+        cluster.vehicleClusterDetails.email.toLowerCase() !==
+        String(email).toLowerCase()
+      ) {
         return res.status(401).json({
           success: false,
-          message: "Email ID does not match with this cluster record."
+          message: "Email ID does not match with this cluster record.",
         });
       }
     }
@@ -592,7 +915,7 @@ exports.verifyOwnerLogin = async (req, res) => {
     if (storedPassword !== password) {
       return res.status(401).json({
         success: false,
-        message: "Incorrect access password. Please try again."
+        message: "Incorrect access password. Please try again.",
       });
     }
 
@@ -601,38 +924,52 @@ exports.verifyOwnerLogin = async (req, res) => {
     if (currentStatus === "Restricted" || currentStatus === "Rejected") {
       return res.status(403).json({
         success: false,
-        message: `Login Access Denied. Your account status is currently set to '${currentStatus}'. Please contact Super Admin.`
+        message: `Login Access Denied. Your account status is currently set to '${currentStatus}'. Please contact Super Admin.`,
       });
     }
 
+    // Normalize empty/legacy kycStatus before saving
+    const validKycStatuses = ["Pending", "Verified", "Rejected"];
+    if (!cluster.kyc) {
+      cluster.kyc = {};
+    }
+    if (!validKycStatuses.includes(cluster.kyc.kycStatus)) {
+      cluster.kyc.kycStatus = "Pending";
+    }
+
     // Record login timestamp & IP in loginHistory array
-    const clientIp = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+    const clientIp =
+      req.ip ||
+      req.headers["x-forwarded-for"] ||
+      req.socket?.remoteAddress ||
+      "127.0.0.1";
     if (!cluster.loginHistory) cluster.loginHistory = [];
     cluster.loginHistory.push({
       loginTime: new Date(),
-      ipAddress: clientIp
+      ipAddress: clientIp,
     });
 
     await cluster.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Authentication successful",
       data: {
         clusterId: cluster._id,
         ownerId: cluster.vehicleClusterOwnerId,
-        ownerName: cluster.vehicleClusterDetails?.ownerName || cluster.vehicleClusterOwnerName,
+        ownerName:
+          cluster.vehicleClusterDetails?.ownerName ||
+          cluster.vehicleClusterOwnerName,
         email: cluster.vehicleClusterDetails?.email,
         status: currentStatus,
-        kycStatus: cluster.kyc?.kycStatus || "Pending"
-      }
+        kycStatus: cluster.kyc?.kycStatus || "Pending",
+      },
     });
-
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Internal server error during verification.",
-      error: error.message
+      error: error.message,
     });
   }
 };
@@ -727,7 +1064,7 @@ exports.assignVehiclesBulk = async (req, res) => {
     // Server-to-Server Call to EV Fleet Server
     // ==========================================
     try {
-      const fleetServerUrl = 'http://localhost:5003';
+      
       
       const syncResponse = await fetch(`${fleetServerUrl}/api/vehicle-assign-closter-info/bulk-assign-with-history`, {
         method: 'POST',
@@ -840,7 +1177,7 @@ exports.removeVehicleFromCluster = async (req, res) => {
     // Server-to-Server DELETE Call to EV Fleet Server
     // ==========================================
     try {
-      const fleetServerUrl = 'http://localhost:5003';
+      
       
       const syncResponse = await fetch(`${fleetServerUrl}/api/vehicle-assign-closter-info/${vehicleId}`, {
         method: 'DELETE',

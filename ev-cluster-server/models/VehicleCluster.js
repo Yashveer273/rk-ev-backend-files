@@ -25,15 +25,19 @@ const vehicleClusterSchema = new mongoose.Schema({
     image: { type: String },
     status: { type: String, enum: ['Active', 'Verified', 'Pending', 'Rejected', 'Restricted'], default: 'Pending', index: true }
   },
-  kyc: {
-    kycId: { 
-      type: String, 
+kyc: {
+    kycId: {
+      type: String,
     },
-    pan: { type: String,  },
+    pan: { type: String },
     documentUrl: { type: String },
-    kycStatus: { type: String, enum: ['Pending', 'Verified', 'Rejected'] },
+    kycStatus: {
+      type: String,
+      enum: ['Pending', 'Verified', 'Rejected'],
+      default: 'Pending',
+    },
     rejectionReason: { type: String, default: '' },
-    submittedAt: { type: Date,  }
+    submittedAt: { type: Date },
   },
   loginHistory: [
     {
