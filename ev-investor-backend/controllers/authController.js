@@ -184,7 +184,7 @@ const loginInvestor = async (req, res) => {
   try {
     const phone = normalizePhone(req.body.phone || '');
     const password = String(req.body.password || '');
-
+console.log('Login attempt:', { phone, password });
     if (!phone || !password) {
       return res.status(400).json({
         success: false,

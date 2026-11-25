@@ -1,210 +1,679 @@
+
 const mongoose = require('mongoose');
 
-const graphPointSchema = new mongoose.Schema(
+const { Schema } = mongoose;
+
+// --------------------------------------------------
+// Investment History
+// --------------------------------------------------
+
+const investmentHistorySchema = new Schema(
   {
-    id: { type: String, required: true, trim: true },
-    date: { type: String, required: true, trim: true }, // YYYY-MM-DD
-    investedAmount: { type: Number, required: true, default: 0 },
-    monthlyReturn: { type: Number, required: true, default: 0 },
+    investmentId: {
+      type: String,
+      default: () => new mongoose.Types.ObjectId().toString(),
+    },
+
+    date: {
+      type: Date,
+      default: Date.now,
+    },
+
+    amount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    status: {
+      type: String,
+      enum: ['Disbursed', 'Pending', 'Failed'],
+      default: 'Disbursed',
+    },
+
+    referenceId: {
+      type: String,
+      default: '',
+    },
+
+    note: {
+      type: String,
+      default: '',
+    },
+
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+  },
+  { timestamps: true }
+);
+
+// --------------------------------------------------
+// Legacy Investment Flow
+// --------------------------------------------------
+
+const investmentFlowSchema = new Schema(
+  {
+    referenceId: {
+      type: String,
+      default: '',
+    },
+
+    investmentDate: {
+      type: Date,
+      default: null,
+    },
+
+    disbursedAt: {
+      type: Date,
+      default: null,
+    },
+
+    investedAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    investmentStatus: {
+      type: String,
+      default: 'Disbursed',
+    },
+
+    isInvestmentDisbursed: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { timestamps: true }
+);
+
+// --------------------------------------------------
+// Return Settlement History
+// --------------------------------------------------
+
+const returnSettlementSchema = new Schema(
+  {
+    settlementId: {
+      type: String,
+      default: () => new mongoose.Types.ObjectId().toString(),
+    },
+
+    date: {
+      type: Date,
+      default: Date.now,
+    },
+
+    amount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    status: {
+      type: String,
+      enum: ['Settled', 'Credited', 'Pending'],
+      default: 'Pending',
+    },
+
+    referenceId: {
+      type: String,
+      default: '',
+    },
+
+    note: {
+      type: String,
+      default: '',
+    },
+
+    settledBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+  },
+  { timestamps: true }
+);
+
+// --------------------------------------------------
+// Monthly Return History
+// Maximum 3 calendar months per asset.
+// --------------------------------------------------
+
+const monthlyReturnHistorySchema = new Schema(
+  {
+    monthKey: {
+      type: String,
+      required: true,
+      match: /^\d{4}-(0[1-9]|1[0-2])$/,
+    },
+
+    dueDate: {
+      type: Date,
+      required: true,
+    },
+
+    expectedAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    paidAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    status: {
+      type: String,
+      enum: [
+        'Upcoming',
+        'Pending',
+        'Overdue',
+        'Partial',
+        'Paid',
+        'Failed',
+      ],
+      default: 'Upcoming',
+    },
+
+    paidAt: {
+      type: Date,
+      default: null,
+    },
+
+    transactionId: {
+      type: String,
+      default: '',
+    },
+
+    referenceId: {
+      type: String,
+      default: '',
+    },
+
+    note: {
+      type: String,
+      default: '',
+    },
+
+    updatedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+  },
+  { timestamps: true }
+);
+
+// --------------------------------------------------
+// Next Reinvestment
+// No fixed investment duration or installment plan.
+// --------------------------------------------------
+
+const nextReinvestmentSchema = new Schema(
+  {
+    date: {
+      type: Date,
+      default: null,
+    },
+
+    amount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    status: {
+      type: String,
+      enum: [
+        'Planned',
+        'Overdue',
+        'Completed',
+        'Cancelled',
+      ],
+      default: 'Planned',
+    },
+
+    note: {
+      type: String,
+      default: '',
+    },
+
+    updatedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+
+    updatedAt: {
+      type: Date,
+      default: Date.now,
+    },
   },
   { _id: false }
 );
 
-const assetSummarySchema = new mongoose.Schema(
+// --------------------------------------------------
+// Asset Summary
+// --------------------------------------------------
+
+const assetSummarySchema = new Schema(
   {
-    investedAmount: { type: Number, required: true, default: 0 },
-    purchaseDate: { type: String, required: true, trim: true },
-    monthlyReturn: { type: Number, required: true, default: 0 },
-    nextReturnAmount: { type: Number, required: true, default: 0 },
-    nextReturnDate: { type: String, required: true, trim: true },
+    investedAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    purchaseDate: {
+      type: Date,
+      default: null,
+    },
+
+    monthlyReturn: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    totalReturnedAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    lastReturnDate: {
+      type: Date,
+      default: null,
+    },
+
+    // Legacy compatibility fields.
+    // These mirror nextReinvestment.
+    nextReturnAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    nextReturnDate: {
+      type: Date,
+      default: null,
+    },
   },
   { _id: false }
 );
 
-const assetRenewalSchema = new mongoose.Schema(
+// --------------------------------------------------
+// Renewal History
+// --------------------------------------------------
+
+const renewalSchema = new Schema(
   {
-    tenureMonths: { type: Number, required: true, default: 36 },
-    completedMonths: { type: Number, required: true, default: 0 },
-    remainingMonths: { type: Number, required: true, default: 36 },
-    isRenewable: { type: Boolean, default: true },
-    renewalBonusPercent: { type: Number, default: 2 },
-    renewedDate: { type: String, default: null },
+    renewalId: {
+      type: String,
+      default: () => new mongoose.Types.ObjectId().toString(),
+    },
+
+    date: {
+      type: Date,
+      default: Date.now,
+    },
+
+    amount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    note: {
+      type: String,
+      default: '',
+    },
+
+    referenceId: {
+      type: String,
+      default: '',
+    },
+  },
+  { timestamps: true }
+);
+
+// --------------------------------------------------
+// Graph Point
+// Legacy optional data only.
+// --------------------------------------------------
+
+const graphPointSchema = new Schema(
+  {
+    date: {
+      type: Date,
+      default: null,
+    },
+
+    investedAmount: {
+      type: Number,
+      default: 0,
+    },
+
+    monthlyReturn: {
+      type: Number,
+      default: 0,
+    },
   },
   { _id: false }
 );
 
-const productSpecsSchema = new mongoose.Schema(
-  {
-    id: { type: String, default: '' },
-    vehicleType: { type: String, default: '2-Wheeler' },
-    vehicleNoPlate: { type: String, default: '' },
-    companyName: { type: String, default: 'EV' },
-    purchaseLocation: { type: String, default: '' },
-    sellerName: { type: String, default: 'Company Direct' },
-    headquarterLocation: { type: String, default: '' },
-    purchasePrice: { type: Number, default: 0 },
-    investmentAmount: { type: Number, default: 0 },
-    investorReturnRate: { type: Number, default: 0 },
-    outboundRentalRate: { type: Number, default: 0 },
-    status: { type: String, default: 'Active' },
-    vehicleModelName: { type: String, default: '' },
-    vehicleYearModel: { type: Number, default: 2026 },
-    vehicleMotorPowerKw: { type: Number, default: 0 },
-    vehicleServiceNo: { type: Number, default: 1 },
-    batteryCapacityKwh: { type: Number, default: 0 },
-    rangeKm: { type: Number, default: 0 },
-    topSpeedKmph: { type: Number, default: 0 },
-    vehicleImage: { type: [String], default: [] },
-    vehicleId: { type: String, default: '' },
-    clusterCity: { type: String, default: 'Aligarh' },
-    clusterState: { type: String, default: 'Uttar Pradesh' },
-  },
-  { _id: false }
-);
+// --------------------------------------------------
+// Portfolio Asset
+// --------------------------------------------------
 
-const portfolioAssetSchema = new mongoose.Schema(
+const portfolioAssetSchema = new Schema(
   {
     assetId: {
       type: String,
       required: true,
-      unique: true,
-      trim: true,
     },
-    investorId: {
+
+    productId: {
       type: String,
-      required: true,
-      index: true,
-      trim: true,
+      ref: 'EVProduct',
+      default: null,
     },
-    vehicleId: {
+
+    product: {
+      type: Schema.Types.Mixed,
+      default: {},
+    },
+
+    productName: {
       type: String,
-      required: true,
-      trim: true,
+      default: '',
     },
-    storeId: {
+
+    productImage: {
       type: String,
-      required: true,
-      trim: true,
+      default: '',
     },
-    vehicleNoPlate: {
+
+    category: {
       type: String,
-      required: true,
-      trim: true,
+      default: '',
     },
-    vehicleModelName: {
+
+    busNumber: {
       type: String,
-      required: true,
-      trim: true,
+      default: '',
     },
-    vehicleYearModel: {
-      type: Number,
-      default: 2026,
-    },
-    companyName: {
-      type: String,
-      default: 'EV',
-      trim: true,
-    },
-    vehicleImage: {
-      type: [String],
-      default: [],
-    },
-    clusterCity: {
-      type: String,
-      default: 'Aligarh',
-      trim: true,
-    },
-    clusterState: {
-      type: String,
-      default: 'Uttar Pradesh',
-      trim: true,
-    },
+
     units: {
       type: Number,
       default: 1,
       min: 1,
     },
-    investedAmount: {
-      type: Number,
-      required: true,
-      min: 0,
+
+    investmentHistory: {
+      type: [investmentHistorySchema],
+      default: [],
     },
-    monthlyReturn: {
-      type: Number,
-      required: true,
-      min: 0,
+
+    // Old records compatibility.
+    investmentFlow: {
+      type: [investmentFlowSchema],
+      default: [],
     },
-    status: {
-      type: String,
-      enum: ['Active', 'Expiring Soon', 'Renewed', 'Closed'],
-      default: 'Active',
+
+    returnSettlements: {
+      type: [returnSettlementSchema],
+      default: [],
     },
-    isRenewable: {
-      type: Boolean,
-      default: true,
+
+    // Monthly expected and received return records.
+    monthlyReturnHistory: {
+      type: [monthlyReturnHistorySchema],
+      default: [],
     },
-    purchaseDate: {
-      type: String,
-      required: true,
-      trim: true,
+
+    nextReinvestment: {
+      type: nextReinvestmentSchema,
+      default: () => ({}),
     },
+
     assetSummary: {
       type: assetSummarySchema,
-      required: true,
+      default: () => ({}),
     },
+
     renewal: {
-      type: assetRenewalSchema,
-      required: true,
+      type: [renewalSchema],
+      default: [],
     },
+
     assetGraph: {
       points: {
         type: [graphPointSchema],
         default: [],
       },
     },
-    productSpecs: {
-      type: productSpecsSchema,
-      default: () => ({}),
+
+    status: {
+      type: String,
+      enum: ['Active', 'Inactive', 'Completed'],
+      default: 'Active',
+    },
+
+    notes: {
+      type: String,
+      default: '',
     },
   },
   { timestamps: true }
 );
 
-portfolioAssetSchema.methods.toItemJSON = function toItemJSON() {
-  return {
-    id: this.assetId,
-    investorId: this.investorId,
-    vehicleId: this.vehicleId,
-    storeId: this.storeId,
-    vehicleNoPlate: this.vehicleNoPlate,
-    vehicleModelName: this.vehicleModelName,
-    vehicleYearModel: this.vehicleYearModel,
-    companyName: this.companyName,
-    vehicleImage: this.vehicleImage,
-    clusterCity: this.clusterCity,
-    clusterState: this.clusterState,
-    units: this.units,
-    investedAmount: this.investedAmount,
-    monthlyReturn: this.monthlyReturn,
-    status: this.status,
-    isRenewable: this.isRenewable,
-    purchaseDate: this.purchaseDate,
-  };
-};
+// --------------------------------------------------
+// Main Portfolio Schema
+// One portfolio document per investor.
+// --------------------------------------------------
 
-portfolioAssetSchema.methods.toDetailJSON = function toDetailJSON() {
-  return {
-    id: this.assetId,
-    investorId: this.investorId,
-    vehicleId: this.vehicleId,
-    storeId: this.storeId,
-    status: this.status,
-    units: this.units,
-    assetSummary: this.assetSummary,
-    renewal: this.renewal,
-    assetGraph: this.assetGraph,
-    productSpecs: this.productSpecs,
-  };
-};
+const portfolioSchema = new Schema(
+  {
+    investorId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+      unique: true,
+      index: true,
+    },
 
-module.exports = mongoose.model('PortfolioAsset', portfolioAssetSchema);
+    investorName: {
+      type: String,
+      default: '',
+    },
+
+    investorEmail: {
+      type: String,
+      default: '',
+    },
+
+    assets: {
+      type: [portfolioAssetSchema],
+      default: [],
+    },
+
+    deployedCapital: {
+      totalInvested: {
+        type: Number,
+        default: 0,
+      },
+
+      totalReturned: {
+        type: Number,
+        default: 0,
+      },
+
+      totalAssets: {
+        type: Number,
+        default: 0,
+      },
+
+      activeAssets: {
+        type: Number,
+        default: 0,
+      },
+    },
+  },
+  { timestamps: true }
+);
+
+// --------------------------------------------------
+// Recalculate portfolio totals before saving.
+// --------------------------------------------------
+
+portfolioSchema.pre('save', function (next) {
+  let totalInvested = 0;
+  let totalReturned = 0;
+  let activeAssets = 0;
+
+  const now = new Date();
+
+  const currentMonth = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    1
+  );
+
+  const threeMonthStart = new Date(
+    currentMonth.getFullYear(),
+    currentMonth.getMonth() - 2,
+    1
+  );
+
+  for (const asset of this.assets) {
+    // Keep only current month and previous two months.
+    asset.monthlyReturnHistory = (
+      asset.monthlyReturnHistory || []
+    )
+      .filter((item) => {
+        if (!item.dueDate) return false;
+
+        const dueDate = new Date(item.dueDate);
+
+        return dueDate >= threeMonthStart;
+      })
+      .sort((a, b) => {
+        return new Date(a.dueDate) - new Date(b.dueDate);
+      });
+
+    const history = asset.investmentHistory || [];
+
+    // New history is the source of truth.
+    // Legacy flow is used only when new history is empty.
+    if (history.length > 0) {
+      totalInvested += history.reduce((sum, item) => {
+        return item.status === 'Disbursed'
+          ? sum + Number(item.amount || 0)
+          : sum;
+      }, 0);
+    } else {
+      totalInvested += (asset.investmentFlow || []).reduce(
+        (sum, item) => {
+          const isDisbursed =
+            item.isInvestmentDisbursed === true ||
+            String(item.investmentStatus || '').toLowerCase() ===
+              'disbursed';
+
+          return isDisbursed
+            ? sum + Number(item.investedAmount || 0)
+            : sum;
+        },
+        0
+      );
+    }
+
+    const settlements = asset.returnSettlements || [];
+
+    const actualReturned = settlements.reduce((sum, item) => {
+      const status = String(item.status || '').toLowerCase();
+
+      return ['settled', 'credited'].includes(status)
+        ? sum + Number(item.amount || 0)
+        : sum;
+    }, 0);
+
+    totalReturned += actualReturned;
+
+    asset.assetSummary = asset.assetSummary || {};
+
+    asset.assetSummary.investedAmount = totalInvestedForAsset(
+      asset
+    );
+
+    asset.assetSummary.totalReturnedAmount = actualReturned;
+
+    const completedSettlements = settlements
+      .filter((item) =>
+        ['settled', 'credited'].includes(
+          String(item.status || '').toLowerCase()
+        )
+      )
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    asset.assetSummary.lastReturnDate =
+      completedSettlements.length > 0
+        ? completedSettlements[0].date
+        : null;
+
+    if (asset.nextReinvestment) {
+      asset.assetSummary.nextReturnDate =
+        asset.nextReinvestment.date || null;
+
+      asset.assetSummary.nextReturnAmount =
+        Number(asset.nextReinvestment.amount || 0);
+    }
+
+    if (asset.status === 'Active') {
+      activeAssets++;
+    }
+  }
+
+  this.deployedCapital = {
+    totalInvested,
+    totalReturned,
+    totalAssets: this.assets.length,
+    activeAssets,
+  };
+
+  next();
+});
+
+// --------------------------------------------------
+// Helper: Calculate invested amount for one asset.
+// --------------------------------------------------
+
+function totalInvestedForAsset(asset) {
+  const history = asset.investmentHistory || [];
+
+  if (history.length > 0) {
+    return history.reduce((sum, item) => {
+      return item.status === 'Disbursed'
+        ? sum + Number(item.amount || 0)
+        : sum;
+    }, 0);
+  }
+
+  return (asset.investmentFlow || []).reduce((sum, item) => {
+    const isDisbursed =
+      item.isInvestmentDisbursed === true ||
+      String(item.investmentStatus || '').toLowerCase() ===
+        'disbursed';
+
+    return isDisbursed
+      ? sum + Number(item.investedAmount || 0)
+      : sum;
+  }, 0);
+}
+
+module.exports = mongoose.model('Portfolio', portfolioSchema);
